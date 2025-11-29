@@ -127,6 +127,7 @@
             <div class="bar-bg" style="height:20px; border-color:var(--neon-red);"><div id="boss-bar-fill" class="bar-fill" style="width:100%;"></div></div>
         </div>
         <div id="heat-ui">
+            <!-- Legacy Heat UI kept hidden, moved to player head -->
             <div id="heat-msg" style="margin-bottom:5px; font-weight:bold; text-shadow:0 0 5px black; letter-spacing:2px;"></div>
             <div id="heat-bar-container"><div id="heat-bar-fill"></div></div>
             <div id="cool-minigame"><div id="sweet-spot"></div><div id="cool-cursor"></div></div>
@@ -265,23 +266,22 @@
     const LEVEL_CONFIG = [
         { name:"THE SPRAWL", color:"#080808", grid:"#1a1a1a", hazard:null, waves:[
             {count:15,rate:1.5,types:['hound']},
-            {count:25,rate:1.2,types:['hound','junkie']},
-            {count:40,rate:0.9,types:['junkie','shielder','molotov']}
+            {count:25,rate:1.2,types:['hound','junkie'], formation: 'v_shape'},
+            {count:40,rate:0.9,types:['junkie','shielder','molotov'], formation: 'encircle'}
         ], boss:'boss_tank' },
         { name:"CORPO PLAZA", color:"#050515", grid:"#101030", hazard:"traffic", waves:[
             {count:20,rate:1.2,types:['drone_sec']},
-            {count:35,rate:1.0,types:['drone_sec','drone_med']},
-            {count:50,rate:0.7,types:['barrier','sniper','drone_sec']}
+            {count:35,rate:1.0,types:['drone_sec','drone_med'], formation: 'line'},
+            {count:50,rate:0.7,types:['barrier','sniper','drone_sec'], formation: 'encircle'}
         ], boss:'boss_exec' },
         { name:"SERVER FARM", color:"#000800", grid:"#001a00", hazard:"steam", waves:[
             {count:30,rate:0.9,types:['bit_eater','leech']},
-            {count:45,rate:0.7,types:['bit_eater','replicator']},
-            {count:60,rate:0.5,types:['logic_bomb','replicator','bit_eater']}
+            {count:45,rate:0.7,types:['bit_eater','replicator'], formation: 'v_shape'},
+            {count:60,rate:0.5,types:['logic_bomb','replicator','bit_eater'], formation: 'encircle'}
         ], boss:'boss_core' }
     ];
 
     const UPGRADE_POOL = [
-        // Same as before
         { id:'kernel_oc', name:'内核超频 v1.0', tag:'Overclock', color:'#ff003c', cost:5, classes:['all'], desc:'基础伤害 +10%', effect:p=>p.weapon.damage*=1.1 },
         { id:'light_driver', name:'轻量化驱动', tag:'Driver', color:'#fcee0a', cost:4, classes:['all'], desc:'移动速度 +8%', effect:p=>p.speed*=1.08 },
         { id:'magnet_hs', name:'磁力握手协议', tag:'Magnet', color:'#bc13fe', cost:3, classes:['all'], desc:'拾取范围 +25%', effect:p=>p.stats.xpRange*=1.25 },
@@ -302,13 +302,13 @@
         { id:'overload_pulse', name:'过载脉冲', tag:'Techie', color:'#00ff41', cost:9, classes:['techie'], desc:'武器过热时释放全屏震波', effect:p=>{p.hooks.onOverheat = ()=>{ createShockwave(p.x,p.y,'#ff003c',800); enemies.forEach(e=>{ takeDamage(e, 50, false, 'explosion'); e.pushX=(e.x-p.x)*5; e.pushY=(e.y-p.y)*5; }); }} }
     ];
 
-    let state = { isRunning:false, paused:false, lastTime:0, timeElapsed:0, kills:0, level:1, xp:0, nextLevelXp:10, width:0, height:0, shake:0, hitStop:0, difficulty:DIFFICULTIES.normal, levelIndex:0, waveIndex:0, waveSpawned:0, waveKilled:0, bossActive:false, spawnTimer:0, upgrades:[], globalTime:0, encounteredEnemies: new Set(), market:{active:false, x:0, y:0, timer:0, interact:0, items:[], refreshCost:50} };
+    let state = { isRunning:false, paused:false, lastTime:0, timeElapsed:0, kills:0, level:1, xp:0, nextLevelXp:10, width:0, height:0, shake:0, hitStop:0, difficulty:DIFFICULTIES.normal, levelIndex:0, waveIndex:0, waveSpawned:0, waveKilled:0, bossActive:false, spawnTimer:0, upgrades:[], globalTime:0, encounteredEnemies: new Set(), market:{active:false, x:0, y:0, timer:0, interact:0, items:[], refreshCost:50, shieldTimer:0} };
     const camera = { x:0, y:0 };
-    const player = { x:0, y:0, speed:180, hp:100, maxHp:100, humanity:100, credits:0, radius:12, color:'#fff', invincible:0, skillCd:0, maxSkillCd:10, angle:0, vx:0, vy:0, isDash:false, dashTimer:0, shield:false, stats:{}, weapon:{}, hooks:{}, lastAttackTime:0 };
+    const player = { x:0, y:0, speed:180, hp:100, maxHp:100, humanity:100, credits:0, radius:12, color:'#fff', invincible:0, skillCd:0, maxSkillCd:10, angle:0, vx:0, vy:0, isDash:false, dashTimer:0, shield:false, stats:{}, weapon:{}, hooks:{}, lastAttackTime:0, jammed:false };
     let enemies=[], bullets=[], particles=[], gems=[], credits=[], texts=[], turrets=[], hazards=[], boss=null;
     const keys = {};
 
-    // --- AI Behaviors (from previous step) ---
+    // --- AI Behaviors ---
     const AI_BEHAVIORS = {
         flank: (e, p, dt) => {
             const dist = getDist(e, p);
@@ -400,7 +400,7 @@
     }
 
     function setupWeapon(t) {
-        player.weapon = {type:t, heat:0, maxHeat:100, cooldown:0, isOverheated:false, isVenting:false, ventProgress:0, ventSpeed:1.5, spread:0.1, count:1, overclockTimer:0};
+        player.weapon = {type:t, heat:0, maxHeat:100, cooldown:0, isOverheated:false, isVenting:false, ventProgress:0, ventSpeed:1.5, spread:0.1, count:1, overclockTimer:0, jamTimer: 0, isInSweetSpot: false, wasInSpot: false};
         const w = player.weapon;
         if(t==='smart_pistol') { w.damage=15; w.fireRate=0.25; w.range=450; w.projectileSpeed=500; w.spread=0.2; }
         else if(t==='shotgun') { w.damage=10; w.fireRate=0.8; w.range=350; w.count=5; w.spread=0.5; w.projectileSpeed=600; }
@@ -414,38 +414,68 @@
         state.levelIndex=0; state.waveIndex=0; state.waveSpawned=0; state.waveKilled=0; state.bossActive=false; state.spawnTimer=0;
         state.upgrades=[]; player.x=0; player.y=0; player.humanity=100; player.skillCd=0; player.lastAttackTime=0; player.credits = 0;
         state.encounteredEnemies = new Set();
-        state.market = {active: false, x: 0, y: 0, timer: 0, interact: 0, items: [], refreshCost: 50};
+        state.market = {active: false, x: 0, y: 0, timer: 0, interact: 0, items: [], refreshCost: 50, shieldTimer: 0};
         document.getElementById('menu-upgrade-list').innerHTML='<div style="text-align:center;color:#666">NONE</div>';
         document.getElementById('boss-ui').style.display='none';
     }
 
     // --- Black Market Logic ---
     function spawnMarket() {
-        // Find a safe spot near player
         const angle = Math.random() * Math.PI * 2;
         const dist = 500;
         state.market.x = player.x + Math.cos(angle) * dist;
         state.market.y = player.y + Math.sin(angle) * dist;
         state.market.active = true;
-        state.market.timer = 30; // 30 seconds duration
+        state.market.timer = 30; 
         state.market.interact = 0;
-        showText("UNAUTHORIZED SIGNAL DETECTED", player.x, player.y - 100, '#00ff41');
+        state.market.shieldTimer = 10; // 10s Safe Zone
+        
+        // Landing Effect
+        createShockwave(state.market.x, state.market.y, '#00ff41', 400);
+        enemies.forEach(e => {
+            const d = getDist(e, state.market);
+            if (d < 400) {
+                 e.pushX = (e.x - state.market.x) * 5;
+                 e.pushY = (e.y - state.market.y) * 5;
+                 takeDamage(e, 20, false, 'market_landing');
+            }
+        });
+
+        showText("MARKET ONLINE - SAFE ZONE", state.market.x, state.market.y - 100, '#00ff41');
         playSound('powerup');
     }
 
     function openMarket() {
         state.paused = true;
-        generateMarketItems();
+        generateMarketItems(false);
         updateMarketUI();
         document.getElementById('market-screen').classList.remove('hidden');
     }
 
-    function generateMarketItems() {
+    function generateMarketItems(isRefresh) {
         state.market.items = [];
-        const pool = MARKET_ITEMS; // All items for now
+        const pool = MARKET_ITEMS;
+        // Price Inflation: +10% per wave, +50% per level
+        const inflation = 1 + (state.levelIndex * 0.5) + (state.waveIndex * 0.1);
+
         for(let i=0; i<4; i++) {
-            const item = pool[Math.floor(Math.random() * pool.length)];
-            state.market.items.push(item);
+            // Reroll Boost: Higher chance for Rare+ items if refreshed
+            let valid = false;
+            let item = null;
+            let attempts = 0;
+            
+            while(!valid && attempts < 10) {
+                item = pool[Math.floor(Math.random() * pool.length)];
+                if (isRefresh) {
+                    // On reroll, boost weights for Epic/Legendary
+                    if (item.rarity === 'common' && Math.random() < 0.5) { attempts++; continue; } 
+                }
+                valid = true;
+            }
+            
+            // Clone and set Dynamic Cost
+            const actualCost = Math.floor(item.cost * inflation);
+            state.market.items.push({...item, actualCost: actualCost});
         }
     }
 
@@ -460,14 +490,14 @@
         state.market.items.forEach((item, index) => {
             const div = document.createElement('div');
             div.className = `market-card ${item.type === 'C' ? 'cursed' : ''}`;
-            const canAfford = player.credits >= item.cost;
-            const canBear = player.humanity > item.hum || item.hum <= 0; // Can buy if hum cost is negative (gain) or sufficient
+            const canAfford = player.credits >= item.actualCost;
+            const canBear = player.humanity > item.hum || item.hum <= 0;
             
             div.innerHTML = `
                 <div class="item-icon">${item.icon}</div>
                 <div style="font-weight:bold; color:${item.type==='C'?'var(--neon-red)':'var(--neon-blue)'}">${item.name}</div>
                 <div style="font-size:0.8rem; color:#aaa; margin:5px 0;">${item.desc}</div>
-                <div class="item-price" style="color:${canAfford?'var(--neon-yellow)':'var(--neon-red)'}">${item.cost} ¥</div>
+                <div class="item-price" style="color:${canAfford?'var(--neon-yellow)':'var(--neon-red)'}">${item.actualCost} ¥</div>
                 <div class="item-cost-hum ${(!canBear || (player.humanity-item.hum < 20 && item.hum > 0)) ? 'danger' : ''}">${item.hum > 0 ? '-' + item.hum : '+' + Math.abs(item.hum)} Humanity</div>
             `;
             
@@ -477,21 +507,15 @@
     }
 
     function buyItem(item, index) {
-        if (player.credits >= item.cost) {
-            // Humanity check? Allow going into psychosis, but warn visually
-            player.credits -= item.cost;
+        if (player.credits >= item.actualCost) {
+            player.credits -= item.actualCost;
             player.humanity -= item.hum; 
             if(player.humanity > 100) player.humanity = 100;
-            
-            // Apply Effect
             item.effect(player);
-            
-            // Remove from slot
-            state.market.items.splice(index, 1); // Or replace with 'Sold Out'
-            
-            playSound('powerup'); // Ca-ching placeholder
+            state.market.items.splice(index, 1);
+            playSound('powerup');
             updateMarketUI();
-            updateUpgradeList(); // If it adds to stats, maybe log it
+            updateUpgradeList();
         } else {
             playSound('jam');
         }
@@ -500,8 +524,8 @@
     function refreshMarket() {
         if (player.credits >= state.market.refreshCost) {
             player.credits -= state.market.refreshCost;
-            state.market.refreshCost += 50;
-            generateMarketItems();
+            state.market.refreshCost += 25; // Lower increase (was 50)
+            generateMarketItems(true); // Enable Luck Boost
             updateMarketUI();
             playSound('powerup');
         } else {
@@ -512,7 +536,7 @@
     function closeMarket() {
         document.getElementById('market-screen').classList.add('hidden');
         state.paused = false;
-        state.market.active = false; // Drone leaves after use
+        state.market.active = false;
         state.lastTime = performance.now();
         requestAnimationFrame(gameLoop);
     }
@@ -553,21 +577,38 @@
     function restartGame() { location.reload(); }
 
     function handleCooling() {
-        if (player.stats.infiniteHeat) {
-            // Overload Core logic
-            return; 
-        }
+        if (player.stats.infiniteHeat) { return; }
         const w = player.weapon;
-        if (!w.isVenting && w.heat>0 && !w.isOverheated) { w.isVenting=true; w.ventProgress=0; w.sweetSpotWidth=0.15+Math.random()*0.1; w.sweetSpotStart=0.3+Math.random()*0.4; }
+        
+        // Prevent action if Jammed
+        if (w.jamTimer > 0) {
+            playSound('jam');
+            showText("JAMMED", player.x, player.y - 40, '#ff003c');
+            return;
+        }
+
+        if (!w.isVenting && w.heat>0 && !w.isOverheated) { 
+            w.isVenting=true; w.ventProgress=0; w.sweetSpotWidth=0.15+Math.random()*0.1; w.sweetSpotStart=0.3+Math.random()*0.4; w.wasInSpot=false;
+        }
         else if (w.isVenting) {
             if (w.ventProgress>=w.sweetSpotStart && w.ventProgress<=(w.sweetSpotStart+w.sweetSpotWidth)) {
                 w.heat=0; w.isVenting=false; w.overclockTimer=5; showText("OVERCLOCK!",player.x,player.y-40,'#00ff41'); playSound('powerup'); createExplosion(player.x,player.y,20,'#00ff41');
-            } else { w.isVenting=false; w.heat=Math.max(0,w.heat-15); showText("JAMMED",player.x,player.y-40,'#ff003c'); playSound('jam'); }
+            } else { 
+                // FAIL: Penalty Increased
+                w.isVenting=false; 
+                w.heat=Math.max(0,w.heat-5); // Clear less heat on fail
+                w.jamTimer = 1.0; // Jam for 1 second
+                showText("JAMMED (1s)",player.x,player.y-40,'#ff003c'); 
+                playSound('jam'); 
+            }
         }
     }
 
     function useSkill() {
-        if (player.skillCd > 0 || player.jammed) return; 
+        if (player.skillCd > 0 || player.jammed || player.weapon.jamTimer > 0) {
+            if (player.weapon.jamTimer > 0) playSound('jam');
+            return; 
+        }
         player.skillCd = player.maxSkillCd * (1 - player.stats.cooldownReduc);
         playSound('powerup'); showText("SKILL!", player.x, player.y-50, player.color);
         if (player.classId === 'solo') {
@@ -609,7 +650,55 @@
         l.innerHTML = state.upgrades.map(u => `<div class="upgrade-list-item"><span>${u.name}</span><span style="color:${u.color}">${u.tag}</span></div>`).join('');
     }
 
+    // --- Enemy Spawning 2.0: Formations ---
+    function spawnEnemyGroup(types, count, formation) {
+        if (!formation || formation === 'random') {
+             for(let i=0; i<count; i++) spawnEnemy(types);
+             return;
+        }
+
+        const type = types[Math.floor(Math.random()*types.length)];
+        const data = ENEMY_DATA[type];
+        if (!state.encounteredEnemies.has(type)) state.encounteredEnemies.add(type);
+        
+        // Base spawn distance
+        const dist = Math.max(state.width, state.height) * 0.8;
+        const angle = Math.random() * Math.PI * 2;
+        
+        for(let i=0; i<count; i++) {
+            let ex = 0, ey = 0;
+            if (formation === 'v_shape') {
+                // V Shape: Leader at angle, others slightly behind and spread
+                const offsetAngle = (i % 2 === 0 ? 1 : -1) * Math.ceil(i/2) * 0.2;
+                const offsetDist = Math.ceil(i/2) * 40;
+                ex = player.x + Math.cos(angle + offsetAngle) * (dist + offsetDist);
+                ey = player.y + Math.sin(angle + offsetAngle) * (dist + offsetDist);
+            } else if (formation === 'line') {
+                // Line abreast perpendicular to player direction
+                const lineAngle = angle + Math.PI/2;
+                const spacing = 50;
+                const offset = (i - count/2) * spacing;
+                ex = player.x + Math.cos(angle) * dist + Math.cos(lineAngle) * offset;
+                ey = player.y + Math.sin(angle) * dist + Math.sin(lineAngle) * offset;
+            } else if (formation === 'encircle') {
+                // Surround player
+                const step = (Math.PI * 2) / count;
+                ex = player.x + Math.cos(i * step) * dist;
+                ey = player.y + Math.sin(i * step) * dist;
+            }
+
+            const scale = 1 + (state.levelIndex*0.5);
+            enemies.push({ 
+                id: type, x: ex, y: ey, 
+                hp:data.hp*scale*state.difficulty.hp, maxHp:data.hp*scale*state.difficulty.hp, 
+                speed:data.speed*state.difficulty.speed, color:data.color, size:data.size, xp:data.xp, credits: data.credits,
+                ai:data.ai, shape:data.shape, pushX:0, pushY:0, frozen:0, angle:0, scale: 0.1, state: 0, timer: 0, shield: (data.ai === 'shielder' || data.ai === 'barrier')
+            });
+        }
+    }
+
     function spawnEnemy(types) {
+        // Fallback single spawn
         const a = Math.random()*Math.PI*2; const d = Math.max(state.width,state.height)*0.8;
         const type = types[Math.floor(Math.random()*types.length)];
         const data = ENEMY_DATA[type];
@@ -757,7 +846,17 @@
         if(state.waveSpawned < currentWave.count) {
             state.spawnTimer -= dt;
             if(state.spawnTimer <= 0) {
-                spawnEnemy(currentWave.types); state.waveSpawned++; state.spawnTimer = (1.0 / currentWave.rate) / state.difficulty.spawn;
+                // Use new Group Spawn logic
+                if (currentWave.formation) {
+                    // Spawn a group of 5
+                    const grp = Math.min(5, currentWave.count - state.waveSpawned);
+                    spawnEnemyGroup(currentWave.types, grp, currentWave.formation);
+                    state.waveSpawned += grp;
+                } else {
+                    spawnEnemy(currentWave.types); 
+                    state.waveSpawned++; 
+                }
+                state.spawnTimer = (1.0 / currentWave.rate) / state.difficulty.spawn;
             }
         }
     }
@@ -765,11 +864,29 @@
     function update(dt) {
         if (state.hitStop > 0) { state.hitStop -= dt; return; }
 
+        // Particle Limiter: Prevent too many particles
+        while(particles.length > 200) particles.shift();
+
         spawnWaveEnemy(dt);
         
         // Market Logic
         if (state.market.active) {
             state.market.timer -= dt;
+            
+            // Market Shield Logic
+            if (state.market.shieldTimer > 0) {
+                state.market.shieldTimer -= dt;
+                // Continuous push away
+                enemies.forEach(e => {
+                    const d = getDist(e, state.market);
+                    if (d < 200) {
+                         const angle = Math.atan2(e.y - state.market.y, e.x - state.market.x);
+                         e.pushX += Math.cos(angle) * 500 * dt;
+                         e.pushY += Math.sin(angle) * 500 * dt;
+                    }
+                });
+            }
+
             if (state.market.timer <= 0) { state.market.active = false; showText("MARKET CLOSED", state.market.x, state.market.y - 50, '#aaa'); }
             else if (getDist(player, state.market) < 60) {
                 state.market.interact += dt;
@@ -808,8 +925,12 @@
         }
         camera.x += (player.x - state.width/2 - camera.x)*0.1; camera.y += (player.y - state.height/2 - camera.y)*0.1;
 
-        const w = player.weapon; w.cooldown-=dt; if(w.overclockTimer>0) w.overclockTimer-=dt;
-        if(!w.isOverheated && !w.isVenting) {
+        const w = player.weapon; 
+        w.cooldown-=dt; 
+        if(w.overclockTimer>0) w.overclockTimer-=dt;
+        if (w.jamTimer > 0) w.jamTimer -= dt;
+
+        if(!w.isOverheated && !w.isVenting && w.jamTimer <= 0) {
             if(w.type==='monowire' && w.cooldown<=0) {
                 let hit=false;
                 enemies.forEach(e=>{ if(getDist(e,player)<w.range) { 
@@ -859,8 +980,26 @@
             if(player.hooks.onOverheat) player.hooks.onOverheat();
             setTimeout(()=>{w.isOverheated=false; w.heat=0;},3000); 
         }
-        if(w.isVenting) { w.ventProgress+=dt*w.ventSpeed; if(w.ventProgress>=1){w.isVenting=false; w.heat=Math.max(0,w.heat-20);} }
-        else if(!w.isOverheated && w.heat>0 && w.cooldown<-0.2) w.heat = Math.max(0, w.heat-dt*10);
+        if(w.isVenting) { 
+            w.ventProgress+=dt*w.ventSpeed; 
+            
+            // Check for Audio Cue on Entering Sweet Spot
+            const inSpot = w.ventProgress >= w.sweetSpotStart && w.ventProgress <= (w.sweetSpotStart + w.sweetSpotWidth);
+            if (inSpot && !w.wasInSpot) {
+                playSound('tick');
+            }
+            w.isInSweetSpot = inSpot;
+            w.wasInSpot = inSpot;
+
+            if(w.ventProgress>=1){
+                w.isVenting=false; 
+                w.heat=Math.max(0,w.heat-10); // Failed by timeout
+                w.jamTimer = 1.0; 
+                showText("MISSED", player.x, player.y-40, '#ff003c');
+                playSound('jam');
+            } 
+        }
+        else if(!w.isOverheated && w.heat>0 && w.cooldown<-0.2 && w.jamTimer <= 0) w.heat = Math.max(0, w.heat-dt*10);
 
         const lvl = LEVEL_CONFIG[Math.min(state.levelIndex, LEVEL_CONFIG.length-1)];
         document.getElementById('biome-name').innerText = lvl.name;
@@ -906,7 +1045,26 @@
             if(e.hp<=0) return;
             if(e.frozen>0) { e.frozen-=dt; return; }
             AI_BEHAVIORS[e.ai || 'default'](e, player, dt);
-            let sx=0, sy=0; enemies.forEach(o=>{ if(e!==o && getDist(e,o)<e.size*2) { const d=getDist(e,o)||1; sx+=(e.x-o.x)/d; sy+=(e.y-o.y)/d; }});
+            
+            // Soft Collision + Hard Collision
+            let sx=0, sy=0; 
+            enemies.forEach(o=>{ 
+                if(e!==o) {
+                    const d=getDist(e,o)||1;
+                    if (d < e.size * 2) {
+                        // Soft Push
+                        sx+=(e.x-o.x)/d; 
+                        sy+=(e.y-o.y)/d;
+                        // Hard Push (Physical Body)
+                        if (d < e.size + o.size) {
+                            const overlap = (e.size + o.size - d) / 2;
+                            e.pushX += (e.x - o.x) / d * overlap * 10; // Strong impulse
+                            e.pushY += (e.y - o.y) / d * overlap * 10;
+                        }
+                    }
+                }
+            });
+
             e.pushX*=0.9; e.pushY*=0.9;
             e.x += (Math.cos(e.angle)*e.speed + sx*50 + e.pushX)*dt; e.y += (Math.sin(e.angle)*e.speed + sy*50 + e.pushY)*dt;
             if (e.scale && e.scale !== 1) { e.scale += (1 - e.scale) * 10 * dt; } else { e.scale = 1; }
@@ -925,9 +1083,19 @@
         });
         enemies = enemies.filter(e=>e.hp>0);
 
+        // Gems with Exponential Magnetism
         gems.forEach((g,i)=>{
-            if(getDist(player,g) < 120*(player.stats.xpRange||1)) { g.x+=(player.x-g.x)*8*dt; g.y+=(player.y-g.y)*8*dt; }
-            if(getDist(player,g) < 20) {
+            const dist = getDist(player, g);
+            // Slightly increased pickup range to feel better
+            if(dist < 150 * (player.stats.xpRange||1)) {
+                g.speed = (g.speed || 0) + 1500 * dt; // Exponential acceleration
+                const angle = Math.atan2(player.y - g.y, player.x - g.x);
+                g.x += Math.cos(angle) * g.speed * dt;
+                g.y += Math.sin(angle) * g.speed * dt;
+            } else {
+                g.speed = 0; // Reset if lost target
+            }
+            if(dist < 20) {
                 state.xp += g.val*(player.stats.xpBonus||1);
                 if(player.humanity<20) player.hp=Math.min(player.maxHp, player.hp+2);
                 if(player.hooks.onXp) player.hooks.onXp();
@@ -936,9 +1104,18 @@
             }
         });
         
+        // Credits with Exponential Magnetism
         credits.forEach((c,i)=>{
-            if(getDist(player,c) < 120*(player.stats.xpRange||1)) { c.x+=(player.x-c.x)*8*dt; c.y+=(player.y-c.y)*8*dt; }
-            if(getDist(player,c) < 20) {
+            const dist = getDist(player, c);
+            if(dist < 150 * (player.stats.xpRange||1)) { 
+                c.speed = (c.speed || 0) + 1500 * dt; // Exponential acceleration
+                const angle = Math.atan2(player.y - c.y, player.x - c.x);
+                c.x += Math.cos(angle) * c.speed * dt;
+                c.y += Math.sin(angle) * c.speed * dt;
+            } else {
+                c.speed = 0;
+            }
+            if(dist < 20) {
                 player.credits += c.val;
                 credits.splice(i,1); playSound('pickup');
             }
@@ -948,7 +1125,15 @@
             p.life-=dt; if(p.type==='shockwave'){ /* handled in render */ } else { p.x+=p.vx*dt; p.y+=p.vy*dt; }
             if(p.life<=0) particles.splice(i,1);
         });
-        texts.forEach((d,i)=>{ d.y-=30*dt; d.life-=dt; if(d.life<=0) texts.splice(i,1); });
+        
+        // Text Fountain Effect
+        texts.forEach((d,i)=>{ 
+            d.x += (d.vx || 0) * dt; // Apply horizontal drift
+            d.y += (d.vy || -30) * dt; // Apply vertical float (velocity based)
+            d.life-=dt; 
+            if(d.life<=0) texts.splice(i,1); 
+        });
+        
         if(player.invincible>0) player.invincible-=dt;
     }
 
@@ -977,6 +1162,18 @@
                  const iy = player.y + Math.sin(angle) * 300;
                  ctx.fillStyle = '#00ff00'; ctx.beginPath(); ctx.arc(ix, iy, 10, 0, Math.PI*2); ctx.fill();
             }
+            
+            // Safe Zone Shield
+            if (state.market.shieldTimer > 0) {
+                 ctx.beginPath();
+                 ctx.arc(mx, my, 200, 0, Math.PI * 2);
+                 ctx.fillStyle = `rgba(0, 255, 65, ${0.1 + Math.sin(t*10)*0.05})`;
+                 ctx.fill();
+                 ctx.strokeStyle = '#00ff41';
+                 ctx.lineWidth = 2;
+                 ctx.stroke();
+            }
+
             // Drone
             ctx.fillStyle = '#004400'; ctx.beginPath(); ctx.arc(mx, my, 40, 0, Math.PI*2); ctx.fill();
             ctx.strokeStyle = '#00ff00'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(mx, my, 40, 0, Math.PI*2); ctx.stroke();
@@ -1033,15 +1230,55 @@
 
     function drawPlayerHUD(ctx) {
         const x = player.x; const y = player.y; const r = player.radius + 20; const w = player.weapon;
+        
         ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.strokeStyle = 'rgba(50, 50, 50, 0.5)'; ctx.lineWidth = 3; ctx.stroke();
+        
         const heatPct = w.heat / (w.maxHeat * (player.stats.heatCapMulti || 1));
-        ctx.beginPath(); ctx.arc(x, y, r, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * heatPct)); ctx.strokeStyle = w.isOverheated ? '#ff003c' : (heatPct > 0.8 ? '#ff8800' : '#fcee0a'); ctx.lineWidth = 3; ctx.stroke();
+        const jammed = w.jamTimer > 0;
+
+        // Base Heat Bar
+        ctx.beginPath(); 
+        ctx.arc(x, y, r, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * heatPct)); 
+        ctx.strokeStyle = jammed ? '#888' : (w.isOverheated ? '#ff003c' : (heatPct > 0.8 ? '#ff8800' : '#fcee0a')); 
+        ctx.lineWidth = 3; 
+        ctx.stroke();
+
+        // Venting Minigame
         if (w.isVenting) {
-            const startAngle = -Math.PI/2 + (Math.PI * 2 * w.sweetSpotStart); const endAngle = startAngle + (Math.PI * 2 * w.sweetSpotWidth); const cursorAngle = -Math.PI/2 + (Math.PI * 2 * w.ventProgress);
-            ctx.beginPath(); ctx.arc(x, y, r + 6, startAngle, endAngle); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 5; ctx.stroke();
-            ctx.beginPath(); ctx.arc(x, y, r + 6, cursorAngle - 0.1, cursorAngle + 0.1); ctx.strokeStyle = '#ff003c'; ctx.lineWidth = 5; ctx.stroke();
+            const startAngle = -Math.PI/2 + (Math.PI * 2 * w.sweetSpotStart); 
+            const endAngle = startAngle + (Math.PI * 2 * w.sweetSpotWidth); 
+            const cursorAngle = -Math.PI/2 + (Math.PI * 2 * w.ventProgress);
+            
+            // Sweet Spot Zone
+            ctx.beginPath(); ctx.arc(x, y, r + 6, startAngle, endAngle); 
+            ctx.strokeStyle = '#ffffff'; 
+            ctx.lineWidth = 5; 
+            ctx.stroke();
+
+            // Cursor Logic
+            ctx.beginPath(); 
+            // Pulse Effect: Larger radius and thicker line if inside sweet spot
+            if (w.isInSweetSpot) {
+                ctx.arc(x, y, r + 8, cursorAngle - 0.15, cursorAngle + 0.15); 
+                ctx.strokeStyle = '#00ff41'; // Bright Green/Cyan
+                ctx.lineWidth = 8;
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = '#00ff41';
+            } else {
+                ctx.arc(x, y, r + 6, cursorAngle - 0.1, cursorAngle + 0.1); 
+                ctx.strokeStyle = '#ff003c'; // Red
+                ctx.lineWidth = 5;
+                ctx.shadowBlur = 0;
+            }
+            ctx.stroke();
+            ctx.shadowBlur = 0;
         }
-        if (w.isOverheated) { ctx.fillStyle = '#ff003c'; ctx.font = '10px "Share Tech Mono"'; ctx.textAlign = 'center'; ctx.fillText("OVERHEAT", x, y - r - 8); }
+
+        if (w.isOverheated) { 
+            ctx.fillStyle = '#ff003c'; ctx.font = '10px "Share Tech Mono"'; ctx.textAlign = 'center'; ctx.fillText("OVERHEAT", x, y - r - 8); 
+        } else if (jammed) {
+             ctx.fillStyle = '#ff003c'; ctx.font = '10px "Share Tech Mono"'; ctx.textAlign = 'center'; ctx.fillText("JAMMED", x, y - r - 8); 
+        }
     }
 
     function drawGrid(ctx, biome, t) {
@@ -1089,9 +1326,23 @@
 
     function createExplosion(x,y,c,col) { for(let i=0;i<c;i++) particles.push({x:x,y:y,vx:(Math.random()-0.5)*200,vy:(Math.random()-0.5)*200,life:0.4+Math.random()*0.4,color:col,size:Math.random()*3+1}); }
     function createShockwave(x,y,col,rad) { particles.push({x:x,y:y,vx:0,vy:0,life:0.5,color:col,size:10,type:'shockwave',maxRadius:rad}); }
-    function showText(t,x,y,c,s=16) { texts.push({text:t,x:x,y:y,color:c,life:1,size:s}); }
+    
+    // Updated showText with X-axis drift (fountain effect)
+    function showText(t,x,y,c,s=16) { 
+        texts.push({
+            text:t,
+            x:x,
+            y:y,
+            color:c,
+            life:1,
+            size:s,
+            vx: (Math.random() - 0.5) * 80, // Random Horizontal drift
+            vy: -50 // Initial upward pop
+        }); 
+    }
+    
     function gameOver() { state.isRunning=false; document.getElementById('final-time').innerText=document.getElementById('timer').innerText; document.getElementById('final-kills').innerText=state.kills; document.getElementById('gameover-screen').classList.remove('hidden'); }
-    function playSound(t) { if(audioCtx.state==='suspended')audioCtx.resume(); const o=audioCtx.createOscillator(),g=audioCtx.createGain(),now=audioCtx.currentTime; o.connect(g); g.connect(audioCtx.destination); if(t==='shoot'){o.frequency.setValueAtTime(200,now);o.frequency.exponentialRampToValueAtTime(50,now+0.1);g.gain.setValueAtTime(0.05,now);g.gain.linearRampToValueAtTime(0,now+0.1);o.start(now);o.stop(now+0.1);} else if(t==='hit'){o.type='sawtooth';o.frequency.setValueAtTime(100,now);g.gain.setValueAtTime(0.05,now);g.gain.linearRampToValueAtTime(0,now+0.1);o.start(now);o.stop(now+0.1);} else if(t==='powerup'){o.frequency.setValueAtTime(400,now);o.frequency.linearRampToValueAtTime(800,now+0.3);g.gain.setValueAtTime(0.05,now);g.gain.linearRampToValueAtTime(0,now+0.3);o.start(now);o.stop(now+0.3);} else if(t==='jam'){o.type='square';o.frequency.setValueAtTime(100,now);g.gain.setValueAtTime(0.05,now);g.gain.linearRampToValueAtTime(0,now+0.2);o.start(now);o.stop(now+0.2);} else if(t==='overheat'){o.type='triangle';o.frequency.setValueAtTime(300,now);o.frequency.linearRampToValueAtTime(100,now+0.5);g.gain.setValueAtTime(0.1,now);g.gain.linearRampToValueAtTime(0,now+0.5);o.start(now);o.stop(now+0.5);} }
+    function playSound(t) { if(audioCtx.state==='suspended')audioCtx.resume(); const o=audioCtx.createOscillator(),g=audioCtx.createGain(),now=audioCtx.currentTime; o.connect(g); g.connect(audioCtx.destination); if(t==='shoot'){o.frequency.setValueAtTime(200,now);o.frequency.exponentialRampToValueAtTime(50,now+0.1);g.gain.setValueAtTime(0.05,now);g.gain.linearRampToValueAtTime(0,now+0.1);o.start(now);o.stop(now+0.1);} else if(t==='hit'){o.type='sawtooth';o.frequency.setValueAtTime(100,now);g.gain.setValueAtTime(0.05,now);g.gain.linearRampToValueAtTime(0,now+0.1);o.start(now);o.stop(now+0.1);} else if(t==='powerup'){o.frequency.setValueAtTime(400,now);o.frequency.linearRampToValueAtTime(800,now+0.3);g.gain.setValueAtTime(0.05,now);g.gain.linearRampToValueAtTime(0,now+0.3);o.start(now);o.stop(now+0.3);} else if(t==='jam'){o.type='square';o.frequency.setValueAtTime(100,now);g.gain.setValueAtTime(0.05,now);g.gain.linearRampToValueAtTime(0,now+0.2);o.start(now);o.stop(now+0.2);} else if(t==='overheat'){o.type='triangle';o.frequency.setValueAtTime(300,now);o.frequency.linearRampToValueAtTime(100,now+0.5);g.gain.setValueAtTime(0.1,now);g.gain.linearRampToValueAtTime(0,now+0.5);o.start(now);o.stop(now+0.5);} else if(t==='tick'){o.type='sine';o.frequency.setValueAtTime(800,now);g.gain.setValueAtTime(0.02,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.05);o.start(now);o.stop(now+0.05);} }
 
     function gameLoop(t) { if(!state.isRunning)return; const dt=(t-state.lastTime)/1000; state.lastTime=t; if(!state.paused){state.timeElapsed+=dt; state.globalTime+=dt; update(dt); render();} requestAnimationFrame(gameLoop); }
     
