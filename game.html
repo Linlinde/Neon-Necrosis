@@ -513,9 +513,18 @@
         if(e.hp<=0) killEnemy(e);
     }
 
+    function fireTesla(target, dmg, idx, isCrit) {
+        let list = [target]; let curr = target; takeDamage(target, dmg, isCrit, 'tesla');
+        for(let k=0; k<3; k++) {
+            let next = null; let minDist = 200;
+            enemies.forEach(e => { if(!list.includes(e) && getDist(curr, e) < minDist) { minDist = getDist(curr, e); next = e; } });
+            if(next) { list.push(next); takeDamage(next, dmg * 0.6, false, 'tesla'); particles.push({type:'lightning', chain:[{x:curr.x, y:curr.y}, {x:next.x, y:next.y}], life:0.15, color:'#00f3ff', size:2}); curr = next; } else break;
+        }
+        particles.push({type:'lightning', chain:[{x:player.x, y:player.y}, {x:target.x, y:target.y}], life:0.15, color:'#00f3ff', size:2});
+    }
+
     function normalizeAngle(angle) { while (angle > Math.PI) angle -= Math.PI * 2; while (angle < -Math.PI) angle += Math.PI * 2; return angle; }
 
-    // Reordered function: updateHazards defined here
     function updateHazards(dt, lvl) {
         const lvlCfg = LEVEL_CONFIG[Math.min(state.levelIndex, LEVEL_CONFIG.length-1)];
 
@@ -846,7 +855,7 @@
                      if(player.invincible<=0) { if(player.shield) { player.shield=false; showText("BLOCKED",player.x,player.y-30,'#00f3ff'); } else { player.hp -= b.damage; player.invincible=0.5; state.shake=10; playSound('hit'); if(player.hp<=0) gameOver(); } }
                      bullets.splice(i,1); continue;
                  }
-            } else {
+            } else if (b.type !== 'molotov_bottle') { // FIX: Prevent molotov bottles from hitting enemies (themselves)
                 for(const e of enemies) {
                     if(b.hitList && b.hitList.includes(e)) continue;
                     if(getDist(b,e) < e.size+10) {
