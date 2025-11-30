@@ -360,8 +360,17 @@
         },
         healer: (e, p, dt) => {
             let target = null; enemies.forEach(ally => { if (ally !== e && ally.hp < ally.maxHp) target = ally; });
-            if (target) { e.angle = Math.atan2(target.y - e.y, target.x - e.x); target.hp = Math.min(target.maxHp, target.hp + 10*dt); ctx.strokeStyle = '#00ff00'; ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(target.x, target.y); ctx.stroke(); } 
-            else { e.angle = Math.atan2(p.y - e.y, p.x - e.x) + Math.PI; }
+            if (target) { 
+                e.angle = Math.atan2(target.y - e.y, target.x - e.x); 
+                target.hp = Math.min(target.maxHp, target.hp + 10*dt); 
+                ctx.strokeStyle = '#00ff00'; ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(target.x, target.y); ctx.stroke(); 
+            } else { 
+                // Fix: Don't just run away. Maintain distance.
+                const dist = getDist(e, p);
+                if (dist > 500) { e.angle = Math.atan2(p.y - e.y, p.x - e.x); } // Too far, come back
+                else if (dist < 300) { e.angle = Math.atan2(p.y - e.y, p.x - e.x) + Math.PI; } // Too close, back off
+                else { e.angle = Math.atan2(p.y - e.y, p.x - e.x) + Math.PI / 2; } // Orbit
+            }
         },
         sniper: (e, p, dt) => {
             const dist = getDist(e, p); e.timer = (e.timer || 0) + dt;
@@ -715,8 +724,15 @@
         if(state.waveSpawned < currentWave.count) {
             state.spawnTimer -= dt;
             if(state.spawnTimer <= 0) {
-                if (currentWave.formation) { const grp = Math.min(5, currentWave.count - state.waveSpawned); spawnEnemyGroup(currentWave.types, grp, currentWave.formation); state.waveSpawned += grp; } 
-                else { spawnEnemy(currentWave.types); state.waveSpawned++; }
+                if (currentWave.formation) { 
+                    const grp = Math.min(5, currentWave.count - state.waveSpawned); 
+                    spawnEnemyGroup(currentWave.types, grp, currentWave.formation); 
+                    state.waveSpawned += grp; 
+                } 
+                else { 
+                    spawnEnemy(currentWave.types); 
+                    state.waveSpawned++; 
+                }
                 state.spawnTimer = (1.0 / currentWave.rate) / state.difficulty.spawn;
             }
         }
